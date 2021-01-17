@@ -10,32 +10,27 @@ const Room = (props) => {
   const userStream = useRef();
 
   useEffect(() => {
-    function handleRecieveCall(incoming) {
+    const handleRecieveCall = async (incoming) => {
       peerRef.current = createPeer();
       const desc = new RTCSessionDescription(incoming.sdp);
-      peerRef.current
-        .setRemoteDescription(desc)
-        .then(() => {
-          userStream.current
-            .getTracks()
-            .forEach((track) =>
-              peerRef.current.addTrack(track, userStream.current)
-            );
-        })
-        .then(() => {
-          return peerRef.current.createAnswer();
-        })
-        .then((answer) => {
-          return peerRef.current.setLocalDescription(answer);
-        })
-        .then(() => {
-          const payload = {
-            target: incoming.caller,
-            caller: socketRef.current.id,
-            sdp: peerRef.current.localDescription,
-          };
-          socketRef.current.emit('answer', payload);
-        });
+      await peerRef.current
+        .setRemoteDescription(desc);
+
+      await userStream.current
+        .getTracks()
+        .forEach((track) =>
+          peerRef.current.addTrack(track, userStream.current)
+        );
+
+      const answer = await peerRef.current.createAnswer();
+      await peerRef.current.setLocalDescription(answer);
+
+      const payload = {
+        target: incoming.caller,
+        caller: socketRef.current.id,
+        sdp: peerRef.current.localDescription,
+      };
+      socketRef.current.emit('answer', payload);
     }
 
     function handleAnswer(message) {
@@ -74,49 +69,57 @@ const Room = (props) => {
     }
 
     const fetchStream = async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true,
-      });
-      userVideo.current.srcObject = stream;
-      userStream.current = stream;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: true, // will thrown error if no video device.
+        });
+        userVideo.current.srcObject = stream;
+        userStream.current = stream;
 
-      socketRef.current = io.connect('/');
-      socketRef.current.emit('join room', props.match.params.roomID);
+        socketRef.current = io.connect('/');
+        socketRef.current.emit('join room', props.match.params.roomID);
 
-      socketRef.current.on('other user', (userID) => {
-        callUser(userID);
-        otherUser.current = userID;
-      });
+        socketRef.current.on('other user', (userID) => {
+          callUser(userID);
+          otherUser.current = userID;
+        });
 
-      socketRef.current.on('user joined', (userID) => {
-        otherUser.current = userID;
-      });
+        socketRef.current.on('user joined', (userID) => {
+          otherUser.current = userID;
+        });
 
-      socketRef.current.on('offer', handleRecieveCall);
+        socketRef.current.on('offer', handleRecieveCall);
 
-      socketRef.current.on('answer', handleAnswer);
+        socketRef.current.on('answer', handleAnswer);
 
-      socketRef.current.on('ice-candidate', handleNewICECandidateMsg);
+        socketRef.current.on('ice-candidate', handleNewICECandidateMsg);
+
+      } catch (err) {
+        console.error('fetchStream error:', err);
+        throw new Error(err);
+      }
+
     };
     fetchStream();
   }, [props.match.params.roomID]);
 
-  function handleNegotiationNeededEvent(userID) {
-    peerRef.current
-      .createOffer()
-      .then((offer) => {
-        return peerRef.current.setLocalDescription(offer);
-      })
-      .then(() => {
-        const payload = {
-          target: userID,
-          caller: socketRef.current.id,
-          sdp: peerRef.current.localDescription,
-        };
-        socketRef.current.emit('offer', payload);
-      })
-      .catch((e) => console.log(e));
+  const handleNegotiationNeededEvent = async (userID) => {
+    try {
+      const offer = await peerRef.current
+        .createOffer();
+
+      await peerRef.current.setLocalDescription(offer)
+
+      const payload = {
+        target: userID,
+        caller: socketRef.current.id,
+        sdp: peerRef.current.localDescription,
+      };
+      socketRef.current.emit('offer', payload);
+    } catch (e) {
+      console.error('handleNegotiationNeededEvent error:', e)
+    }
   }
 
   function handleICECandidateEvent(e) {
